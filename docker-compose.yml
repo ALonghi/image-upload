@@ -1,0 +1,21 @@
+services:
+  image_upload_frontend:
+    container_name: image_upload_frontend
+    image: longa/image_upload_frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - 3000:3000
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      - image_upload_backend
+  image_upload_backend:
+    container_name: image_upload_backend
+    image: longa/image_upload_backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - 8080:8080
