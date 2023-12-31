@@ -1,81 +1,20 @@
+use std::collections::HashMap;
+
+use aws_config::BehaviorVersion;
 use axum::{
-    extract::{DefaultBodyLimit, Multipart},
+    extract::{Multipart, State},
     http::StatusCode,
     response::IntoResponse,
+    routing::get,
     routing::post,
     Json, Router,
 };
-use google_cloud_storage::{
-    client::{Client, ClientConfig},
-    http::objects::upload::{Media, UploadObjectRequest, UploadType},
-};
 use serde::Serialize;
+
+use aws_sdk_s3::Client;
+use tower_http::cors::CorsLayer;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
-
-#[derive(Debug, Serialize)]
-struct Response {
-    data: Option<String>,
-    error: Option<String>,
-}
-
-async fn upload_image(
-    mut multipart: Multipart,
-) -> Result<impl IntoResponse, (StatusCode, Json<Response>)> {
-    let config = ClientConfig::default().anonymous();
-    let client = Client::new(config);
-    let bucket_name: String = String::from("your-bucket-name");
-    match multipart.next_field().await.unwrap() {
-        Some(field) => {
-            let file_name = field.file_name().unwrap().to_string();
-            let content_type = field.content_type().unwrap().to_string();
-            let data = field.bytes().await.unwrap();
-
-            let upload_type = UploadType::Simple(Media {
-                name: file_name.into(),
-                content_type: content_type.into(),
-                content_length: Some(data.len() as u64),
-            });
-            let uploaded = client
-                .upload_object(
-                    &UploadObjectRequest {
-                        bucket: bucket_name.clone(),
-                        ..Default::default()
-                    },
-                    data,
-                    &upload_type,
-                )
-                .await
-                .map_err(|e| {
-                    error!("Error uploading object: {:?}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(Response {
-                            data: None,
-                            error: Some(format!("Error uploading file : {}", e.to_string())),
-                        }),
-                    )
-                })?;
-            Ok((
-                StatusCode::OK,
-                Json(Response {
-                    data: Some(format!("File uploaded successfully with \n{:?}", uploaded)),
-                    error: None,
-                }),
-            ))
-        }
-        None => {
-            info!("No field found");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Response {
-                    data: None,
-                    error: Some(String::from("No file to upload")),
-                }),
-            ))
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -84,17 +23,112 @@ async fn main() {
         .with_max_level(Level::DEBUG)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    // the aws credentials from environment
+    let aws_configuration = aws_config::load_defaults(BehaviorVersion::v2023_11_09()).await;
+    //create aws s3 client
+    let aws_s3_client = Client::new(&aws_configuration);
     // routes
     let app = Router::new()
         .route("/upload", post(upload_image))
-        .layer(DefaultBodyLimit::max(1000 * 1024 * 1024));
+        .route("/", get(dummy_handler))
+        .layer(CorsLayer::very_permissive())
+        .with_state(aws_s3_client);
 
     // server
-    let addr = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", 8080).as_str())
+    let addr = tokio::net::TcpListener::bind(format!("localhost:{}", 8080).as_str())
         .await
         .unwrap();
     info!("Backend listening on {}", &addr.local_addr().unwrap());
     axum::serve(addr, app.into_make_service())
         .await
         .expect("Error in creating server");
+}
+
+#[tracing::instrument]
+async fn upload_image(
+    State(s3_client): State<Client>,
+    mut files: Multipart,
+) -> Result<impl IntoResponse, (StatusCode, Json<UploadResponse>)> {
+    info!("Received request to upload file...");
+    // get the name of aws bucket from env variable
+    let bucket = std::env::var("AWS_S3_BUCKET").unwrap_or("my-bucket-name".to_owned());
+    // if you have a public url for your bucket, place it as ENV variable BUCKET_URL
+    //get the public url for aws bucket
+    let bucket_url = std::env::var("BUCKET_URL").unwrap_or(bucket.to_owned());
+    // we are going to store the respose in HashMap as filename: url => key: value
+    let mut res = HashMap::new();
+    while let Some(file) = files.next_field().await.unwrap() {
+        // this is the name which is sent in formdata from frontend or whoever called the api, i am
+        // using it as category, we can get the filename from file data
+        let category = file.name().unwrap().to_string();
+        // name of the file with extention
+        let name = file.file_name().unwrap().to_string();
+        // file data
+        let data = file.bytes().await.unwrap();
+        // the path of file to store on aws s3 with file name and extention
+        // timestamp_category_filename => 14-12-2022_01:01:01_customer_somecustomer.jpg
+        let key = format!(
+            "images/{}_{}_{}",
+            chrono::Utc::now().format("%d-%m-%Y_%H:%M:%S"),
+            &category,
+            &name
+        );
+
+        // send Putobject request to aws s3
+        let _resp = s3_client
+            .put_object()
+            .bucket(&bucket)
+            .key(&key)
+            .body(data.into())
+            .send()
+            .await
+            .map_err(|err| {
+                error!("Error in uploading file: {} ", err.to_string());
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(UploadResponse {
+                        data: None,
+                        error: Some(format!("An error occured during image upload: {}", err)),
+                    }),
+                )
+            })?;
+        info!("Upload response: {:?}", _resp);
+        res.insert(
+            // concatinating name and category so even if the filenames are same it will not
+            // conflict
+            format!("{}_{}", &name, &category),
+            format!("{}/{}", bucket_url, key),
+        );
+    }
+    // send the urls in response
+    Ok(Json(UploadResponse {
+        data: Some(res),
+        error: None,
+    }))
+}
+
+pub async fn dummy_handler(
+    State(_s3_client): State<Client>,
+) -> Result<impl IntoResponse, (StatusCode, Json<StandardResponse>)> {
+    info!("Dummy handler called");
+    Ok((
+        StatusCode::OK,
+        Json(StandardResponse {
+            data: Some(String::from("Hello World!")),
+            error: None,
+        }),
+    ))
+}
+
+#[derive(Debug, Serialize)]
+
+struct UploadResponse {
+    data: Option<HashMap<String, String>>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StandardResponse {
+    data: Option<String>,
+    error: Option<String>,
 }
