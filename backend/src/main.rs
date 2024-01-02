@@ -1,3 +1,5 @@
+pub mod service;
+
 use std::collections::HashMap;
 
 use aws_config::BehaviorVersion;
@@ -18,15 +20,14 @@ use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().ok();
     // logger
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::DEBUG)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     // the aws credentials from environment
-    let aws_configuration = aws_config::load_defaults(BehaviorVersion::v2023_11_09()).await;
-    //create aws s3 client
-    let aws_s3_client = Client::new(&aws_configuration);
+    let aws_s3_client = get_aws_s3_client().await;
     // routes
     let app = Router::new()
         .route("/upload", post(upload_image))
@@ -44,7 +45,13 @@ async fn main() {
         .expect("Error in creating server");
 }
 
-#[tracing::instrument]
+async fn get_aws_s3_client() -> Client {
+    // the aws credentials from environment
+    let aws_configuration = aws_config::load_defaults(BehaviorVersion::v2023_11_09()).await;
+    //create aws s3 client
+    Client::new(&aws_configuration)
+}
+
 async fn upload_image(
     State(s3_client): State<Client>,
     mut files: Multipart,
@@ -83,7 +90,7 @@ async fn upload_image(
             .send()
             .await
             .map_err(|err| {
-                error!("Error in uploading file: {} ", err.to_string());
+                error!("Error in uploading file: {:?} {}", &err, &err.to_string());
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(UploadResponse {
@@ -107,7 +114,7 @@ async fn upload_image(
     }))
 }
 
-pub async fn dummy_handler(
+async fn dummy_handler(
     State(_s3_client): State<Client>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<StandardResponse>)> {
     info!("Dummy handler called");
