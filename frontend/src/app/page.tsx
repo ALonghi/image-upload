@@ -1,20 +1,41 @@
 "use client"
 import ImageUpload from '@/components/ImageUpload'
 import axios from 'axios'
+import { useState } from 'react'
 
 export default function Home() {
-  const handleClick = () => {
-    axios.get(`${process.env.NEXT_PUBLIC_API_URL}/`).then(res => alert(res.data)).catch(err => alert(err))
+  const [response, setResponse] = useState<string>(``)
+  const testData = () => {
+    axios
+      .get(`${process.env.NEXT_PUBLIC_API_URL}/`)
+      .then(res => setResponse(JSON.stringify(res.data, null, 2)))
+      .catch(err => alert(err))
   }
+
+  const listObjects = () => {
+    axios
+      .get(`${process.env.NEXT_PUBLIC_API_URL}/list`)
+      .then(res => setResponse(JSON.stringify(res.data, null, 2)))
+      .catch(err => alert(err))
+  }
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-y-12 p-24">
+      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex h-fit">
         <p>Backend url: {process.env.NEXT_PUBLIC_API_URL}</p>
         <ImageUpload />
         <button type="button"
-          onClick={() => handleClick()}
+          onClick={() => testData()}
           className='disabled:cursor-not-allowed disabled:border-red-600 py-2 px-8 rounded-lg border-gray-700 border hover:bg-gray-700 hover:text-white'>
           Test call</button>
+
+        <button type="button"
+          onClick={() => listObjects()}
+          className='disabled:cursor-not-allowed disabled:border-red-600 py-2 px-8 rounded-lg border-gray-700 border hover:bg-gray-700 hover:text-white'>
+          List objects</button>
+      </div>
+      <div className='mx-auto bg-gray-200 rounded-lg p-4'>
+        <pre className='text-xs'>{response}</pre>
       </div>
     </main>
   )
