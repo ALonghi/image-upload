@@ -1,11 +1,27 @@
-use std::error::Error;
+use std::collections::HashMap;
 
 use aws_sdk_s3::Client;
+use axum::{
+    extract::{Multipart, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use tracing::{error, info};
 
-pub async fn list_objects(client: &Client, bucket: &str) -> Result<(), Box<dyn Error>> {
-    let mut response = client
+use crate::{ListResponse, UploadResponse};
+
+pub async fn list_objects(
+    State(s3_client): State<Client>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ListResponse>)> {
+    info!("Received request to list objects...");
+    let bucket =
+        std::env::var("AWS_S3_BUCKET").expect("AWS_S3_BUCKET not found - bucket name not provided");
+    info!("Listing  objects in {}", &bucket);
+    let mut response = s3_client
         .list_objects_v2()
         .bucket(bucket.to_owned())
+        .prefix("images/")
         .max_keys(10) // In this example, go 10 at a time.
         .into_paginator()
         .send();
@@ -13,16 +29,112 @@ pub async fn list_objects(client: &Client, bucket: &str) -> Result<(), Box<dyn E
     while let Some(result) = response.next().await {
         match result {
             Ok(output) => {
-                for object in output.contents() {
-                    println!(" - {}", object.key().unwrap_or("Unknown"));
+                let objects: Vec<String> = output
+                    .contents()
+                    .into_iter()
+                    .filter_map(|object| {
+                        let key = object.key().unwrap_or("Unknown").to_string();
+                        if key != "images/" {
+                            Some(key)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                for object in &objects {
+                    info!("Object key found - {}", object);
                 }
-                return Ok(());
+
+                return Ok((
+                    StatusCode::OK,
+                    Json(ListResponse {
+                        data: objects,
+                        error: None,
+                    }),
+                ));
             }
             Err(err) => {
-                eprintln!("{err:?}");
-                return Err(Box::new(err));
+                error!("{err:?}");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ListResponse {
+                        data: vec![],
+                        error: Some(format!("An error occured during image upload: {}", err)),
+                    }),
+                ));
             }
         }
     }
-    return Ok(());
+    return Ok((
+        StatusCode::OK,
+        Json(ListResponse {
+            data: vec![],
+            error: None,
+        }),
+    ));
+}
+
+pub async fn upload_image(
+    State(s3_client): State<Client>,
+    mut files: Multipart,
+) -> Result<impl IntoResponse, (StatusCode, Json<UploadResponse>)> {
+    info!("Received request to upload file...");
+    // get the name of aws bucket from env variable
+    let bucket =
+        std::env::var("AWS_S3_BUCKET").expect("AWS_S3_BUCKET not found - bucket name not provided");
+    // if you have a public url for your bucket, place it as ENV variable BUCKET_URL
+    //get the public url for aws bucket
+    let bucket_url =
+        std::env::var("BUCKET_URL").expect("BUCKET_URL not found - bucket url not provided");
+    // we are going to store the respose in HashMap as filename: url => key: value
+    let mut res = HashMap::new();
+    while let Some(file) = files.next_field().await.unwrap() {
+        // this is the name which is sent in formdata from frontend or whoever called the api, i am
+        // using it as category, we can get the filename from file data
+        let category = file.name().unwrap().to_string();
+        // name of the file with extention
+        let name = file.file_name().unwrap().to_string();
+        // file data
+        let data = file.bytes().await.unwrap();
+        // the path of file to store on aws s3 with file name and extention
+        // timestamp_category_filename => 14-12-2022_01:01:01_customer_somecustomer.jpg
+        let key = format!(
+            "{}_{}_{}",
+            chrono::Utc::now().format("%d-%m-%Y_%H:%M:%S"),
+            &category,
+            &name
+        );
+
+        // send Putobject request to aws s3
+        let _resp = s3_client
+            .put_object()
+            .bucket(&bucket)
+            .key(&key)
+            .body(data.into())
+            .send()
+            .await
+            .map_err(|err| {
+                error!("Error in uploading file: {:?} {}", &err, &err.to_string());
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(UploadResponse {
+                        data: None,
+                        error: Some(format!("An error occured during image upload: {}", err)),
+                    }),
+                )
+            })?;
+        info!("Upload response: {:?}", _resp);
+        res.insert(
+            // concatinating name and category so even if the filenames are same it will not
+            // conflict
+            format!("{}_{}", &name, &category),
+            format!("{}/{}", bucket_url, key),
+        );
+    }
+    // send the urls in response
+    Ok(Json(UploadResponse {
+        data: Some(res),
+        error: None,
+    }))
 }
