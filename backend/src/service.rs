@@ -1,5 +1,5 @@
 use crate::model::{
-    AppState, DeleteRequest, EnvVars, ListResponse, StandardResponse, UploadResponse,
+    AppState, DeleteRequest, EnvVars, Image, ListResponse, StandardResponse, UploadResponse,
 };
 use axum::{
     extract::{Multipart, State},
@@ -8,6 +8,8 @@ use axum::{
     Json,
 };
 use tracing::{error, info};
+
+static OBJECT_KEY_PREFIX: &str = "images";
 
 pub fn get_aws_public_url(env_vars: &EnvVars) -> String {
     format!(
@@ -25,7 +27,7 @@ pub async fn list_objects(
         .s3_client
         .list_objects_v2()
         .bucket(&state.env_vars.bucket)
-        .prefix("images/")
+        .prefix(OBJECT_KEY_PREFIX)
         .max_keys(10) // In this example, go 10 at a time.
         .into_paginator()
         .send();
@@ -33,13 +35,20 @@ pub async fn list_objects(
     while let Some(result) = response.next().await {
         match result {
             Ok(output) => {
-                let objects: Vec<String> = output
+                let objects: Vec<Image> = output
                     .contents()
                     .into_iter()
                     .filter_map(|object| {
                         let key = object.key().unwrap_or("Unknown").to_string();
-                        if key != "images/" {
-                            Some(format!("{}/{}", get_aws_public_url(&state.env_vars), key))
+                        if key != format!("{}/", OBJECT_KEY_PREFIX) {
+                            Some(Image {
+                                public_url: format!(
+                                    "{}/{}",
+                                    get_aws_public_url(&state.env_vars),
+                                    key
+                                ),
+                                object_key: key,
+                            })
                         } else {
                             None
                         }
@@ -47,7 +56,7 @@ pub async fn list_objects(
                     .collect();
 
                 for object in &objects {
-                    info!("Object key found - {}", object);
+                    info!("Object key found - {:?}", object);
                 }
 
                 return Ok((
@@ -85,7 +94,7 @@ pub async fn upload_image(
 ) -> Result<impl IntoResponse, (StatusCode, Json<UploadResponse>)> {
     info!("Received request to upload file...");
     // we are going to store the respose in HashMap as filename: url => key: value
-    let mut url = None;
+    let mut image = None;
     while let Some(file) = files.next_field().await.unwrap() {
         // this is the name which is sent in formdata from frontend or whoever called the api, i am
         // using it as category, we can get the filename from file data
@@ -97,7 +106,8 @@ pub async fn upload_image(
         // the path of file to store on aws s3 with file name and extention
         // timestamp_category_filename => 14-12-2022_01:01:01_customer_somecustomer.jpg
         let key = format!(
-            "images/{}_{}_{}",
+            "{}/{}_{}_{}",
+            OBJECT_KEY_PREFIX,
             chrono::Utc::now().format("%d-%m-%Y_%H:%M:%S"),
             &category,
             &name
@@ -124,11 +134,14 @@ pub async fn upload_image(
                 )
             })?;
         info!("Upload response: {:?}", _resp);
-        url = Some(format!("{}/{}", get_aws_public_url(&state.env_vars), key));
+        image = Some(Image {
+            public_url: format!("{}/{}", get_aws_public_url(&state.env_vars), key),
+            object_key: key,
+        });
     }
     // send the urls in response
     Ok(Json(UploadResponse {
-        data: url,
+        data: image,
         error: None,
     }))
 }
@@ -137,6 +150,7 @@ pub async fn remove_object(
     State(state): State<AppState>,
     Json(req): Json<DeleteRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<StandardResponse>)> {
+    info!("Received request to delete object {}...", &req.file_name);
     state
         .s3_client
         .delete_object()
@@ -145,6 +159,7 @@ pub async fn remove_object(
         .send()
         .await
         .map_err(|e| {
+            error!("Error in deleting file: {:?} {}", &e, &e.to_string());
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(StandardResponse {

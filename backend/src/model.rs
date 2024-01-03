@@ -8,16 +8,22 @@ pub struct DeleteRequest {
 }
 
 #[derive(Debug, Serialize)]
+pub struct Image {
+    pub public_url: String,
+    pub object_key: String,
+}
+
+#[derive(Debug, Serialize)]
 
 pub struct UploadResponse {
-    pub data: Option<String>,
+    pub data: Option<Image>,
     pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 
 pub struct ListResponse {
-    pub data: Vec<String>,
+    pub data: Vec<Image>,
     pub error: Option<String>,
 }
 
