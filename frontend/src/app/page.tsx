@@ -1,11 +1,16 @@
 "use client"
 import ImageUpload from '@/components/ImageUpload'
 import axios from 'axios'
+import { error } from 'console'
 import { useState } from 'react'
+export interface Image {
+  public_url: string,
+  object_key: string
+}
 
 export default function Home() {
   const [response, setResponse] = useState<string>(``)
-  const [images, setImages] = useState<string[]>([])
+  const [images, setImages] = useState<Image[]>([])
   const testData = () => {
     axios
       .get(`${process.env.NEXT_PUBLIC_API_URL}/`)
@@ -25,6 +30,16 @@ export default function Home() {
 
   const addImage = (imageUrl) => {
     setImages(prev => [...prev, imageUrl])
+  }
+
+  const deleteImg = async (object_key) => {
+    axios.post(`${process.env.NEXT_PUBLIC_API_URL}/delete`, {
+      file_name: object_key
+    })
+      .then(res => {
+        alert(res.data)
+      })
+      .catch(error => alert(error))
   }
 
   return (
@@ -48,7 +63,12 @@ export default function Home() {
       <p>Length: {images.length || 0}</p>
       {images.length > 0 && (
         <div className='mt-2 w-full flex flex-wrap gap-3 bg-gray-200 rounded-lg p-4'>
-          {images.map((url, index) => <img src={url} key={index} className='w-44 h-auto object-cover' />)}
+          {images.map((image, index) =>
+            <div key={index} className='w-44 h-fit relative'>
+              <p className='absolute cursor-pointer text-red-500 font-bold top-1 right-2 z-20 text-lg' onClick={() => deleteImg(image.object_key)}>x</p>
+              <img src={image.public_url} className='w-44 h-auto object-cover z-10' />
+            </div>
+          )}
         </div>
       )}
     </main>
