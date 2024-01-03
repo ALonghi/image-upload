@@ -1,6 +1,6 @@
 # image-upload
 
-Project used to have full-stack image upload to the Cloud
+POC to have full-stack project uploading files to AWS S3
 
 ## Guides
 
