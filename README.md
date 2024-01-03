@@ -6,8 +6,8 @@ POC to have full-stack project uploading files to AWS S3
 
 ### Setup AWS from Scratch
 
-1. Open Identity and Access Management (`IAM``)
-2. Create a new User Group with the `AmazonS3FullAccess`` permission
+1. Open Identity and Access Management (`IAM`)
+2. Create a new User Group with the `AmazonS3FullAccess` permission
 3. Create a new user that is part of the above user group
 4. Open the user, tap into the `Security Credentials` tab, and create a new Access Key
 5. Take the access key and fill the Env variable `AWS_ACCESS_KEY_ID`
