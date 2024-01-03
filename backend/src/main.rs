@@ -1,24 +1,28 @@
+pub mod model;
 pub mod service;
 
-use std::collections::HashMap;
-
 use aws_config::BehaviorVersion;
+use aws_sdk_s3::Client;
 use axum::{
     extract::State, http::StatusCode, response::IntoResponse, routing::get, routing::post, Json,
     Router,
 };
-use serde::Serialize;
-
-use aws_sdk_s3::Client;
+use model::StandardResponse;
 use tower_http::cors::CorsLayer;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use crate::service::{list_objects, upload_image};
+use crate::{
+    model::{AppState, EnvVars},
+    service::{list_objects, remove_object, upload_image},
+};
 
 #[tokio::main]
 async fn main() {
-    dotenv::dotenv().ok();
+    dotenv::dotenv()
+        .map_err(|e| panic!("Error loading .env file: {:?}", e))
+        .unwrap();
+    let env_vars = EnvVars::init();
     // logger
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
@@ -26,13 +30,18 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     // the aws credentials from environment
     let aws_s3_client = get_aws_s3_client().await;
+    let state = AppState {
+        s3_client: aws_s3_client,
+        env_vars,
+    };
     // routes
     let app = Router::new()
         .route("/upload", post(upload_image))
         .route("/list", get(list_objects))
+        .route("/delete", post(remove_object))
         .route("/", get(dummy_handler))
         .layer(CorsLayer::very_permissive())
-        .with_state(aws_s3_client);
+        .with_state(state);
 
     // server
     let addr = tokio::net::TcpListener::bind(format!("localhost:{}", 8080).as_str())
@@ -52,7 +61,7 @@ async fn get_aws_s3_client() -> Client {
 }
 
 async fn dummy_handler(
-    State(_s3_client): State<Client>,
+    State(_state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<StandardResponse>)> {
     info!("Dummy handler called");
     Ok((
@@ -62,23 +71,4 @@ async fn dummy_handler(
             error: None,
         }),
     ))
-}
-
-#[derive(Debug, Serialize)]
-
-pub struct UploadResponse {
-    data: Option<HashMap<String, String>>,
-    error: Option<String>,
-}
-#[derive(Debug, Serialize)]
-
-pub struct ListResponse {
-    data: Vec<String>,
-    error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct StandardResponse {
-    data: Option<String>,
-    error: Option<String>,
 }

@@ -1,26 +1,22 @@
-use std::collections::HashMap;
-
-use aws_sdk_s3::Client;
+use crate::model::{AppState, DeleteRequest, ListResponse, StandardResponse, UploadResponse};
 use axum::{
     extract::{Multipart, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use std::collections::HashMap;
 use tracing::{error, info};
 
-use crate::{ListResponse, UploadResponse};
-
 pub async fn list_objects(
-    State(s3_client): State<Client>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ListResponse>)> {
     info!("Received request to list objects...");
-    let bucket =
-        std::env::var("AWS_S3_BUCKET").expect("AWS_S3_BUCKET not found - bucket name not provided");
-    info!("Listing  objects in {}", &bucket);
-    let mut response = s3_client
+    info!("Listing  objects in {}", &state.env_vars.bucket);
+    let mut response = state
+        .s3_client
         .list_objects_v2()
-        .bucket(bucket.to_owned())
+        .bucket(&state.env_vars.bucket)
         .prefix("images/")
         .max_keys(10) // In this example, go 10 at a time.
         .into_paginator()
@@ -76,17 +72,10 @@ pub async fn list_objects(
 }
 
 pub async fn upload_image(
-    State(s3_client): State<Client>,
+    State(state): State<AppState>,
     mut files: Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, Json<UploadResponse>)> {
     info!("Received request to upload file...");
-    // get the name of aws bucket from env variable
-    let bucket =
-        std::env::var("AWS_S3_BUCKET").expect("AWS_S3_BUCKET not found - bucket name not provided");
-    // if you have a public url for your bucket, place it as ENV variable BUCKET_URL
-    //get the public url for aws bucket
-    let bucket_url =
-        std::env::var("BUCKET_URL").expect("BUCKET_URL not found - bucket url not provided");
     // we are going to store the respose in HashMap as filename: url => key: value
     let mut res = HashMap::new();
     while let Some(file) = files.next_field().await.unwrap() {
@@ -107,9 +96,10 @@ pub async fn upload_image(
         );
 
         // send Putobject request to aws s3
-        let _resp = s3_client
+        let _resp = state
+            .s3_client
             .put_object()
-            .bucket(&bucket)
+            .bucket(&state.env_vars.bucket)
             .key(&key)
             .body(data.into())
             .send()
@@ -129,7 +119,7 @@ pub async fn upload_image(
             // concatinating name and category so even if the filenames are same it will not
             // conflict
             format!("{}_{}", &name, &category),
-            format!("{}/{}", bucket_url, key),
+            format!("{}/{}", state.env_vars.bucket_url, key),
         );
     }
     // send the urls in response
@@ -137,4 +127,36 @@ pub async fn upload_image(
         data: Some(res),
         error: None,
     }))
+}
+
+pub async fn remove_object(
+    State(state): State<AppState>,
+    Json(req): Json<DeleteRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<StandardResponse>)> {
+    state
+        .s3_client
+        .delete_object()
+        .bucket(state.env_vars.bucket)
+        .key(&req.file_name)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(StandardResponse {
+                    data: None,
+                    error: Some(format!("An error occured during file delete: {}", e)),
+                }),
+            )
+        })?;
+
+    info!("Object {} deleted.", &req.file_name);
+
+    Ok((
+        StatusCode::OK,
+        Json(StandardResponse {
+            data: Some(String::from("Object deleted.")),
+            error: None,
+        }),
+    ))
 }
