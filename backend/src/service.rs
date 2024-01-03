@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use crate::model::{
     AppState, DeleteRequest, EnvVars, Image, ListResponse, StandardResponse, UploadResponse,
 };
@@ -7,6 +9,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use regex::Regex;
 use tracing::{error, info};
 
 static OBJECT_KEY_PREFIX: &str = "images";
@@ -100,7 +103,10 @@ pub async fn upload_image(
         // using it as category, we can get the filename from file data
         let category = file.name().unwrap().to_string();
         // name of the file with extention
-        let name = file.file_name().unwrap().to_string();
+        // Create a Regex to find all non-alphanumeric characters (and dots for extensions)
+        let re = Regex::new(r"[^a-zA-Z0-9.]").unwrap();
+        let name = file.file_name().unwrap().to_string().replace(" ", "_");
+        let sanitized_name = re.replace_all(&name.borrow(), "");
         // file data
         let data = file.bytes().await.unwrap();
         // the path of file to store on aws s3 with file name and extention
@@ -110,7 +116,7 @@ pub async fn upload_image(
             OBJECT_KEY_PREFIX,
             chrono::Utc::now().format("%d-%m-%Y_%H:%M:%S"),
             &category,
-            &name
+            &sanitized_name
         );
 
         // send Putobject request to aws s3
