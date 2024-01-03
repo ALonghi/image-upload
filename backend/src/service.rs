@@ -1,12 +1,20 @@
-use crate::model::{AppState, DeleteRequest, ListResponse, StandardResponse, UploadResponse};
+use crate::model::{
+    AppState, DeleteRequest, EnvVars, ListResponse, StandardResponse, UploadResponse,
+};
 use axum::{
     extract::{Multipart, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
-use std::collections::HashMap;
 use tracing::{error, info};
+
+pub fn get_aws_public_url(env_vars: &EnvVars) -> String {
+    format!(
+        "https://{}.s3.{}.amazonaws.com",
+        env_vars.bucket, env_vars.region
+    )
+}
 
 pub async fn list_objects(
     State(state): State<AppState>,
@@ -31,7 +39,7 @@ pub async fn list_objects(
                     .filter_map(|object| {
                         let key = object.key().unwrap_or("Unknown").to_string();
                         if key != "images/" {
-                            Some(key)
+                            Some(format!("{}/{}", get_aws_public_url(&state.env_vars), key))
                         } else {
                             None
                         }
@@ -77,7 +85,7 @@ pub async fn upload_image(
 ) -> Result<impl IntoResponse, (StatusCode, Json<UploadResponse>)> {
     info!("Received request to upload file...");
     // we are going to store the respose in HashMap as filename: url => key: value
-    let mut res = HashMap::new();
+    let mut url = None;
     while let Some(file) = files.next_field().await.unwrap() {
         // this is the name which is sent in formdata from frontend or whoever called the api, i am
         // using it as category, we can get the filename from file data
@@ -89,7 +97,7 @@ pub async fn upload_image(
         // the path of file to store on aws s3 with file name and extention
         // timestamp_category_filename => 14-12-2022_01:01:01_customer_somecustomer.jpg
         let key = format!(
-            "{}_{}_{}",
+            "images/{}_{}_{}",
             chrono::Utc::now().format("%d-%m-%Y_%H:%M:%S"),
             &category,
             &name
@@ -102,6 +110,7 @@ pub async fn upload_image(
             .bucket(&state.env_vars.bucket)
             .key(&key)
             .body(data.into())
+            .set_acl(Some(aws_sdk_s3::types::ObjectCannedAcl::PublicRead))
             .send()
             .await
             .map_err(|err| {
@@ -115,16 +124,11 @@ pub async fn upload_image(
                 )
             })?;
         info!("Upload response: {:?}", _resp);
-        res.insert(
-            // concatinating name and category so even if the filenames are same it will not
-            // conflict
-            format!("{}_{}", &name, &category),
-            format!("{}/{}", state.env_vars.bucket_url, key),
-        );
+        url = Some(format!("{}/{}", get_aws_public_url(&state.env_vars), key));
     }
     // send the urls in response
     Ok(Json(UploadResponse {
-        data: Some(res),
+        data: url,
         error: None,
     }))
 }

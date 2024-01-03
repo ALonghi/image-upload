@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use aws_sdk_s3::Client;
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +10,7 @@ pub struct DeleteRequest {
 #[derive(Debug, Serialize)]
 
 pub struct UploadResponse {
-    pub data: Option<HashMap<String, String>>,
+    pub data: Option<String>,
     pub error: Option<String>,
 }
 
@@ -31,17 +29,24 @@ pub struct StandardResponse {
 
 #[derive(Clone)]
 pub struct EnvVars {
+    pub region: String,
     pub bucket: String,
     pub bucket_url: String,
 }
 
 impl EnvVars {
     pub fn init() -> Self {
+        let region =
+            std::env::var("AWS_REGION").expect("AWS_REGION not found - region not provided");
         let bucket = std::env::var("AWS_S3_BUCKET")
             .expect("AWS_S3_BUCKET not found - bucket name not provided");
         let bucket_url = std::env::var("AWS_S3_BUCKET_URL")
             .expect("AWS_S3_BUCKET_URL not found - bucket url not provided");
-        EnvVars { bucket, bucket_url }
+        EnvVars {
+            region,
+            bucket,
+            bucket_url,
+        }
     }
 }
 
