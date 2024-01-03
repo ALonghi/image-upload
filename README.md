@@ -1,6 +1,6 @@
 # image-upload
 
-POC to have full-stack project uploading standard images to AWS S3
+POC to have full-stack project uploading files to AWS S3
 
 ## Guides
 
